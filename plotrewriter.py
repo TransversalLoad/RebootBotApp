@@ -1,26 +1,54 @@
-from transformers import pipeline
-
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+import torch
 
 class PlotRewriter:
-    def __init__(self, model_name='distilgpt2', max_new_tokens=30, temperature=0.6): # keeping the text to 200charca50 tokens because output was overly long
-        # Initialising the generator
-        self.generator = pipeline('text-generation', model=model_name)
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
+    def __init__(self):
+        self.model_name = "teknium/OpenHermes-2.5-Mistral-7B"   #FLAN works too
+        
+        # Forcing 4bit to save on VRAM
+        self.bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,  # Match compute dtype to model
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
+        )
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.tokenizer.pad_token = self.tokenizer.eos_token  # dont think token is needed anymore but doesnt conflict
+        
+        #forcing GPU usage and bfloat16 rathe than float 18
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            quantization_config=self.bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16
+        )
+        
+        self.pipe = pipeline(
+            "text-generation",
+            model=self.model,
+            tokenizer=self.tokenizer
+        )
 
-    def rewrite_plot(self, movie_name, movie_summary, rating):
-        """ This application generates an alternate plot based on the movie's name, summary, and rating. """
-        prompt = (
-            f"Rewrite the ending of the movie '{movie_name}'.\n"
-            f"Original plot summary: {movie_summary}\n\n"
-            f"It received a rating of {rating}/10. "
-            "Based on this rating, create a short, clear and concise summary of a revised plot."
-        )
-        # Generate alternate plot hopefully, based on movie name summary the rating 
-        result = self.generator(
+        #humorous is the default tone is only used if other tone isnt selected 
+    def generate_alternative_summary(self, original_summary, rating, tone="humorous"): 
+        prompt = f"""<|im_start|>system
+        You are a fan-fiction movie writer. Rewrite this summary in a {tone} tone.
+        The movie has a {rating}/10 rating.
+        <|im_start|>user
+        {original_summary[:1000]}
+        <|im_start|>assistant
+        """
+        #prompt variables
+        outputs = self.pipe(
             prompt,
-            max_new_tokens=self.max_new_tokens,
-            temperature=self.temperature,
-            num_return_sequences=1
+            max_new_tokens=250,
+            temperature=0.85,
+            top_k=40,
+            top_p=0.9,
+            repetition_penalty=1.2,
+            do_sample=True,
+            pad_token_id=self.tokenizer.eos_token_id 
         )
-        return result[0]['generated_text']
+        
+        return outputs[0]['generated_text'].split("<|im_start|>assistant")[-1].strip()
