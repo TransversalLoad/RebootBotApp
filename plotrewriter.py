@@ -1,54 +1,62 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 import torch
 
+#
 class PlotRewriter:
     def __init__(self):
-        self.model_name = "teknium/OpenHermes-2.5-Mistral-7B"   #FLAN works too
+        # forcing gpu usage, system dependant. If using laptop with no gpu it should default to cpu
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Using Mistral, runs better than others i tried. Needs a lot of VRAM
+        self.model_name = "teknium/OpenHermes-2.5-Mistral-7B"
         
-        # Forcing 4bit to save on VRAM
-        self.bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,  # Match compute dtype to model
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
-        )
-        
+        # Troubleshoot for tokenizer issue
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token  # dont think token is needed anymore but doesnt conflict
-        
-        #forcing GPU usage and bfloat16 rathe than float 18
+        # mappign gpu device, float 16 works better on my memory, and forcing 4bit for low vram
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            quantization_config=self.bnb_config,
-            device_map="auto",
-            torch_dtype=torch.bfloat16
+            device_map="auto",           
+            torch_dtype=torch.float16,   
+            load_in_4bit=True            
         )
         
-        self.pipe = pipeline(
-            "text-generation",
-            model=self.model,
-            tokenizer=self.tokenizer
-        )
-
-        #humorous is the default tone is only used if other tone isnt selected 
-    def generate_alternative_summary(self, original_summary, rating, tone="humorous"): 
+    def generate_alternative_summary(self, original_summary, rating, tone="neutral"):
+        # Prompt for model
         prompt = f"""<|im_start|>system
-        You are a fan-fiction movie writer. Rewrite this summary in a {tone} tone.
-        The movie has a {rating}/10 rating.
-        <|im_start|>user
-        {original_summary[:1000]}
+        Rewrite this movie summary in a {tone} tone. The movie has a {rating}/10 rating.
+        - Don't include labels like "Funny Version:"
+        - Don't repeat the original text
+        - Reply only with the rewritten movie summary
+        Original: {original_summary[:1000]}
         <|im_start|>assistant
         """
-        #prompt variables
-        outputs = self.pipe(
+        
+        # Tokenization
+        # Max length 1024 to avoid running out of tokens or vram
+        inputs = self.tokenizer(
             prompt,
-            max_new_tokens=250,
-            temperature=0.85,
-            top_k=40,
-            top_p=0.9,
-            repetition_penalty=1.2,
-            do_sample=True,
-            pad_token_id=self.tokenizer.eos_token_id 
+            return_tensors="pt",
+            max_length=1024,
+            truncation=True
+        ).to(self.device)
+        
+        # summary generation
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=400,   # Token Limit
+            temperature=0.9,      # Raise if boring output, lower for sensible output 
+            do_sample=True,       # Sampling 
+            pad_token_id=self.tokenizer.eos_token_id  # Not sure if needed still
         )
         
-        return outputs[0]['generated_text'].split("<|im_start|>assistant")[-1].strip()
+        # decode tokens to text
+        full_response = self.tokenizer.decode(
+            outputs[0], 
+            skip_special_tokens=True
+        )
+        
+        # Removing "assistant" labels and "system" labels to clean up output
+        new_summary = full_response.split("assistant")[-1].strip()
+        return new_summary
+
+                
+        
