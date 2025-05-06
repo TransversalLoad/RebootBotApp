@@ -9,9 +9,9 @@ class RatingPredictor:
     def __init__(self, data_dir):
     
         self.data_path = os.path.join(data_dir, "movie_data.csv")
-        # Vectorizer import library for text to numbers
+        # vectorizer import library 
         self.vectorizer = TfidfVectorizer(max_features=1000)
-        # Forest model creation
+        # Forest model 
         self.model = RandomForestRegressor(n_estimators=100)
         
     def train_model(self):
@@ -32,7 +32,7 @@ class RatingPredictor:
         self.model.fit(X, y)
         
         # Save model
-        joblib.dump(self.vectorizer, 'text_processor.joblib') #if these files ares present run test file again
+        joblib.dump(self.vectorizer, 'text_processor.joblib') #if these files arent present run test file again
         joblib.dump(self.model, 'rating_predictor.joblib')
         print("Model training complete!")
     
